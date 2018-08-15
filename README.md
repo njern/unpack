@@ -1,5 +1,5 @@
 # unpack
-Go HTTP middleware which unpacks gzip or deflate-encoded POST requests from clients 
+Go HTTP middleware which unpacks gzip or deflate-encoded HTTP requests from clients 
 
 [![GoDoc Widget]][GoDoc] [![Travis Widget]][Travis]
 

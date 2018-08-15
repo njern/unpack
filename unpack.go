@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-// Middleware which handles unpacking where the client has used
-// 	- Content-Encoding: gzip
-//	- Content-Encoding: deflate.
-// If the client specifies a Content-Encoding but this function
+// Middleware which handles unpacking of requests. It supports unpacking
+// Content-Encoding: gzip and Content-Encoding: deflate. Other encodings
+// are ignored and passed on to the next handler.
+// If the client specifies a supported Content-Encoding but this function
 // fails to parse the body as such, it will fail the request with
 // HTTP 415 and a text/plain error.
 func Middleware(next http.Handler) http.Handler {

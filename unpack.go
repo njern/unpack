@@ -26,15 +26,22 @@ func Middleware(next http.Handler) http.Handler {
 				return
 			}
 
+			r.Header.Set("Content-Encoding", "identity")
+
 		case "deflate":
+			r.Header.Set("Content-Encoding", "identity")
 			r.Body, err = zlib.NewReader(r.Body)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", encoding), http.StatusUnsupportedMediaType)
 				return
 			}
+
+			r.Header.Set("Content-Encoding", "identity")
 		}
 
 		next.ServeHTTP(w, r)
+
+		r.Body.Close()
 	}
 
 	return http.HandlerFunc(fn)

@@ -29,7 +29,6 @@ func Middleware(next http.Handler) http.Handler {
 			r.Header.Set("Content-Encoding", "identity")
 
 		case "deflate":
-			r.Header.Set("Content-Encoding", "identity")
 			r.Body, err = zlib.NewReader(r.Body)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", encoding), http.StatusUnsupportedMediaType)

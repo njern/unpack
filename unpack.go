@@ -18,9 +18,10 @@ func Middleware(next http.Handler) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		var err error
 
+		rc := r.Body
 		switch encoding := strings.ToLower(r.Header.Get("Content-Encoding")); encoding {
 		case "gzip":
-			r.Body, err = gzip.NewReader(r.Body)
+			rc, err = gzip.NewReader(r.Body)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", encoding), http.StatusUnsupportedMediaType)
 				return
@@ -29,7 +30,7 @@ func Middleware(next http.Handler) http.Handler {
 			r.Header.Set("Content-Encoding", "identity")
 
 		case "deflate":
-			r.Body, err = zlib.NewReader(r.Body)
+			rc, err = zlib.NewReader(r.Body)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", encoding), http.StatusUnsupportedMediaType)
 				return
@@ -38,9 +39,10 @@ func Middleware(next http.Handler) http.Handler {
 			r.Header.Set("Content-Encoding", "identity")
 		}
 
+		r.Body = rc
 		next.ServeHTTP(w, r)
 
-		r.Body.Close()
+		rc.Close() // Make sure we close the gzip or zlib reader.
 	}
 
 	return http.HandlerFunc(fn)

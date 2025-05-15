@@ -1,11 +1,13 @@
 package unpack
 
 import (
-	"compress/gzip"
-	"compress/zlib"
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zlib"
+	"github.com/klauspost/compress/zstd"
 )
 
 // Middleware which handles unpacking of requests. It supports unpacking
@@ -37,12 +39,23 @@ func Middleware(next http.Handler) http.Handler {
 			}
 
 			r.Header.Set("Content-Encoding", "identity")
+
+		case "zstd":
+			dec, err := zstd.NewReader(r.Body)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", encoding), http.StatusUnsupportedMediaType)
+				return
+			}
+
+			rc = dec.IOReadCloser()
+
+			r.Header.Set("Content-Encoding", "identity")
 		}
 
 		r.Body = rc
 		next.ServeHTTP(w, r)
 
-		rc.Close() // Make sure we close the gzip or zlib reader.
+		rc.Close() // Make sure we close the reader.
 	}
 
 	return http.HandlerFunc(fn)

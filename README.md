@@ -1,7 +1,9 @@
 # unpack
 Go HTTP middleware which unpacks gzip or deflate-encoded HTTP requests from clients 
 
-[![GoDoc Widget]][GoDoc] [![Travis Widget]][Travis]
+[![Go Report Card](https://goreportcard.com/badge/github.com/njern/unpack)](https://goreportcard.com/report/github.com/njern/unpack)
+[![GoDoc](https://godoc.org/github.com/njern/unpack?status.svg)](https://godoc.org/github.com/njern/unpack)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Example usage (go-chi)
 
@@ -11,9 +13,3 @@ r.Use(unpack.Middleware)
 r.Post("/v1/status", someStatusHandler)
 http.ListenAndServe("127.0.0.1:8080", r))
 ```
-
-
-[GoDoc]: https://godoc.org/github.com/njern/unpack
-[GoDoc Widget]: https://godoc.org/github.com/njern/unpack?status.svg
-[Travis]: https://travis-ci.com/njern/unpack
-[Travis Widget]: https://travis-ci.com/njern/unpack.svg?branch=master

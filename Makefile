@@ -1,0 +1,16 @@
+.PHONY: clean lint fmt modernize test wsl
+
+lint:
+	golangci-lint-v2 run ./...
+
+test:
+	go test ./...
+
+fmt:
+	golangci-lint-v2 fmt ./...
+
+modernize:
+	go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest -fix ./...
+
+wsl:
+	go run github.com/bombsimon/wsl/v5/cmd/wsl@main --fix ./...

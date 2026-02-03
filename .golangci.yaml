@@ -1,0 +1,23 @@
+version: '2'
+linters:
+  default: all
+  disable:
+    - cyclop # cyclomatic complexity threshold checks
+    - gocyclo # cyclomatic complexity checks (alternative to cyclop)
+    - gocognit # cognitive complexity threshold checks
+    - funlen # function length threshold checks
+    - nestif # nested if statements checks
+    - dupl # duplicate code detection
+    - depguard # import allow/deny list enforcement
+    - exhaustruct # requires explicit struct field initialization
+    - varnamelen # variable name length enforcement
+    - wsl # whitespace/style rules (deprecated in favor of wsl_v5)
+    - lll # line length limit checks
+    - gochecknoglobals # disallow package-level globals
+    - gochecknoinits # disallow init() functions
+    - funcorder # enforces function order in files
+    - prealloc # suggests slice preallocation
+    - tagliatelle # struct tag style enforcement
+    - nlreturn # blank line before return enforcement
+    - noinlineerr # discourages inline error creation/wrapping
+    - unparam # flags unused function parameters

@@ -1,4 +1,3 @@
-// Package unpack provides HTTP middleware for decoding compressed request bodies.
 package unpack
 
 import (

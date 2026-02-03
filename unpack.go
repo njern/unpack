@@ -2,6 +2,8 @@
 package unpack
 
 import (
+	"compress/flate"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +13,15 @@ import (
 	"github.com/klauspost/compress/zlib"
 	"github.com/klauspost/compress/zstd"
 )
+
+// Options configures the unpacking middleware.
+type Options struct {
+	// MaxDecompressedBytes limits the decoded request body size.
+	// A zero or negative value disables the limit.
+	MaxDecompressedBytes int64
+	// StrictUnsupportedEncodings returns 415 if an unsupported encoding is present.
+	StrictUnsupportedEncodings bool
+}
 
 const (
 	encodingGzip     = "gzip"
@@ -27,9 +38,34 @@ const (
 // fails to parse the body as such, it will fail the request with
 // HTTP 415 and a text/plain error.
 func Middleware(next http.Handler) http.Handler {
+	return MiddlewareWithOptions(next, Options{})
+}
+
+// MiddlewareWithOptions handles unpacking of requests with configurable options.
+func MiddlewareWithOptions(next http.Handler, opts Options) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		encodings := parseContentEncodings(r.Header.Values("Content-Encoding"))
-		if len(encodings) == 0 || !allSupportedEncodings(encodings) || !hasDecodableEncodings(encodings) {
+		if len(encodings) == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if !allSupportedEncodings(encodings) {
+			if opts.StrictUnsupportedEncodings {
+				unsupported := firstUnsupportedEncoding(encodings)
+				_ = r.Body.Close()
+
+				http.Error(w, unsupportedEncodingMessage(unsupported), http.StatusUnsupportedMediaType)
+
+				return
+			}
+
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
+		if !hasDecodableEncodings(encodings) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -49,7 +85,13 @@ func Middleware(next http.Handler) http.Handler {
 			case encodingGzip:
 				rc, err = gzip.NewReader(rc)
 			case encodingDeflate:
+				base := rc
+
 				rc, err = zlib.NewReader(rc)
+				if err != nil {
+					rc = flate.NewReader(base)
+					err = nil
+				}
 			case encodingZstd:
 				var dec *zstd.Decoder
 
@@ -78,13 +120,22 @@ func Middleware(next http.Handler) http.Handler {
 			reader:  rc,
 			closers: closers,
 		}
-		r.Body = wrappedBody
+
+		var body io.ReadCloser = wrappedBody
+		if opts.MaxDecompressedBytes > 0 {
+			body = &maxBytesReadCloser{
+				rc:  body,
+				max: opts.MaxDecompressedBytes,
+			}
+		}
+
+		r.Body = body
 		r.Header.Del("Content-Encoding")
 		r.ContentLength = -1
 		r.Header.Del("Content-Length")
 
 		defer func() {
-			_ = wrappedBody.Close()
+			_ = body.Close()
 		}()
 
 		next.ServeHTTP(w, r)
@@ -109,12 +160,49 @@ func (m *multiReadCloser) Close() error {
 	return closeAll(m.closers)
 }
 
+type maxBytesReadCloser struct {
+	rc   io.ReadCloser
+	max  int64
+	read int64
+}
+
+// io.ReadCloser passthrough should preserve upstream errors.
+//
+//nolint:wrapcheck
+func (m *maxBytesReadCloser) Read(p []byte) (int, error) {
+	if m.max <= 0 {
+		return m.rc.Read(p)
+	}
+
+	if m.read >= m.max {
+		return 0, &http.MaxBytesError{Limit: m.max}
+	}
+
+	if int64(len(p)) > m.max-m.read {
+		p = p[:m.max-m.read]
+	}
+
+	n, err := m.rc.Read(p)
+
+	m.read += int64(n)
+	if m.read >= m.max && err == nil {
+		return n, &http.MaxBytesError{Limit: m.max}
+	}
+
+	return n, err
+}
+
+// io.Closer passthrough should preserve upstream errors.
+//
+//nolint:wrapcheck
+func (m *maxBytesReadCloser) Close() error {
+	return m.rc.Close()
+}
+
 func closeAll(closers []io.Closer) error {
 	var err error
 	for i := len(closers) - 1; i >= 0; i-- {
-		if cerr := closers[i].Close(); cerr != nil && err == nil {
-			err = cerr
-		}
+		err = errors.Join(err, closers[i].Close())
 	}
 
 	return err
@@ -163,4 +251,21 @@ func hasDecodableEncodings(encodings []string) bool {
 
 func decompressionErrorMessage(encoding string) string {
 	return fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", encoding)
+}
+
+func unsupportedEncodingMessage(encoding string) string {
+	return fmt.Sprintf("Content-Encoding: %s is not supported", encoding)
+}
+
+func firstUnsupportedEncoding(encodings []string) string {
+	for _, encoding := range encodings {
+		switch encoding {
+		case encodingGzip, encodingDeflate, encodingZstd, encodingIdentity:
+			continue
+		default:
+			return encoding
+		}
+	}
+
+	return "unknown"
 }

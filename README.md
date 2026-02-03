@@ -13,3 +13,17 @@ r.Use(unpack.Middleware)
 r.Post("/v1/status", someStatusHandler)
 http.ListenAndServe("127.0.0.1:8080", r)
 ```
+
+## Example usage with options
+
+```go
+r := chi.NewRouter()
+r.Use(func(next http.Handler) http.Handler {
+	return unpack.MiddlewareWithOptions(next, unpack.Options{
+		MaxDecompressedBytes:       10 << 20, // 10 MB
+		StrictUnsupportedEncodings: true,
+	})
+})
+r.Post("/v1/status", someStatusHandler)
+http.ListenAndServe("127.0.0.1:8080", r)
+```

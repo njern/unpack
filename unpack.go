@@ -2,6 +2,7 @@
 package unpack
 
 import (
+	"bufio"
 	"compress/flate"
 	"errors"
 	"fmt"
@@ -42,6 +43,8 @@ func Middleware(next http.Handler) http.Handler {
 }
 
 // MiddlewareWithOptions handles unpacking of requests with configurable options.
+// When StrictUnsupportedEncodings is enabled, any unsupported encoding returns 415.
+// MaxDecompressedBytes limits the decoded body size and returns 413 when exceeded.
 func MiddlewareWithOptions(next http.Handler, opts Options) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		encodings := parseContentEncodings(r.Header.Values("Content-Encoding"))
@@ -85,11 +88,11 @@ func MiddlewareWithOptions(next http.Handler, opts Options) http.Handler {
 			case encodingGzip:
 				rc, err = gzip.NewReader(rc)
 			case encodingDeflate:
-				base := rc
-
-				rc, err = zlib.NewReader(rc)
-				if err != nil {
-					rc = flate.NewReader(base)
+				buffered := bufio.NewReader(rc)
+				if looksLikeZlibHeader(buffered) {
+					rc, err = zlib.NewReader(buffered)
+				} else {
+					rc = flate.NewReader(buffered)
 					err = nil
 				}
 			case encodingZstd:
@@ -268,4 +271,35 @@ func firstUnsupportedEncoding(encodings []string) string {
 	}
 
 	return "unknown"
+}
+
+func looksLikeZlibHeader(reader *bufio.Reader) bool {
+	const (
+		zlibHeaderSize    = 2
+		zlibMethodDeflate = 8
+		zlibMaxWindow     = 7
+		zlibCheckShift    = 8
+		zlibCheckMod      = 31
+		zlibMethodMask    = 0x0F
+	)
+
+	header, err := reader.Peek(zlibHeaderSize)
+	if err != nil {
+		return true
+	}
+
+	cmf := header[0]
+	flg := header[1]
+
+	if cmf&zlibMethodMask != zlibMethodDeflate {
+		return false
+	}
+
+	if cmf>>4 > zlibMaxWindow {
+		return false
+	}
+
+	value := int(cmf)<<zlibCheckShift + int(flg)
+
+	return value%zlibCheckMod == 0
 }

@@ -33,3 +33,26 @@ r.Use(func(next http.Handler) http.Handler {
 r.Post("/v1/status", someStatusHandler)
 http.ListenAndServe("127.0.0.1:8080", r)
 ```
+
+## Example client request (zstd)
+
+```go
+encoder, err := zstd.NewWriter(nil)
+if err != nil {
+	log.Fatal(err)
+}
+defer encoder.Close()
+
+compressed := encoder.EncodeAll([]byte("hello"), nil)
+req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:8080/v1/status", bytes.NewReader(compressed))
+if err != nil {
+	log.Fatal(err)
+}
+req.Header.Set("Content-Encoding", "zstd")
+
+resp, err := http.DefaultClient.Do(req)
+if err != nil {
+	log.Fatal(err)
+}
+defer resp.Body.Close()
+```

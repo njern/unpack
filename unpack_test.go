@@ -25,11 +25,13 @@ type fileTest struct {
 	content  string
 }
 
+const helloText = "hello"
+
 var fileTests = []fileTest{
-	{file: "testdata/hello.txt", encoding: "identity", code: http.StatusOK, content: "hello"},
-	{file: "testdata/hello.txt.gz", encoding: "gzip", code: http.StatusOK, content: "hello"},
-	{file: "testdata/hello.txt.zz", encoding: "deflate", code: http.StatusOK, content: "hello"},
-	{file: "testdata/hello.txt.zst", encoding: "zstd", code: http.StatusOK, content: "hello"},
+	{file: "testdata/hello.txt", encoding: "identity", code: http.StatusOK, content: helloText},
+	{file: "testdata/hello.txt.gz", encoding: "gzip", code: http.StatusOK, content: helloText},
+	{file: "testdata/hello.txt.zz", encoding: "deflate", code: http.StatusOK, content: helloText},
+	{file: "testdata/hello.txt.zst", encoding: "zstd", code: http.StatusOK, content: helloText},
 	{file: "testdata/hello.txt", encoding: "gzip", code: http.StatusUnsupportedMediaType, content: "Content-Encoding: gzip set but unable to decompress body"},
 	{file: "testdata/hello.txt", encoding: "deflate", code: http.StatusUnsupportedMediaType, content: "Content-Encoding: deflate set but unable to decompress body"},
 	{file: "testdata/hello.txt", encoding: "zstd", code: http.StatusUnsupportedMediaType, content: "Content-Encoding: zstd set but unable to decompress body"},
@@ -42,6 +44,13 @@ type requestBodyWriter struct{}
 func (rbw requestBodyWriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, maxErr.Error(), http.StatusRequestEntityTooLarge)
+
+			return
+		}
+
 		var decErr *unpack.DecompressionError
 		if errors.As(err, &decErr) {
 			http.Error(w, fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", decErr.Encoding), http.StatusUnsupportedMediaType)
@@ -129,7 +138,7 @@ func TestUnpackHeaderNormalization(t *testing.T) {
 func TestUnpackMultipleEncodings(t *testing.T) {
 	t.Parallel()
 
-	original := []byte("hello")
+	original := []byte(helloText)
 	encoded := deflateData(t, gzipData(t, original))
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
@@ -147,15 +156,15 @@ func TestUnpackMultipleEncodings(t *testing.T) {
 		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
 	}
 
-	if strings.TrimSuffix(rr.Body.String(), "\n") != "hello" {
-		t.Fatalf("handler returned unexpected body: got '%v' want '%v'", rr.Body.String(), "hello")
+	if strings.TrimSuffix(rr.Body.String(), "\n") != helloText {
+		t.Fatalf("handler returned unexpected body: got '%v' want '%v'", rr.Body.String(), helloText)
 	}
 }
 
 func TestUnpackMultiHeaderEncodings(t *testing.T) {
 	t.Parallel()
 
-	original := []byte("hello")
+	original := []byte(helloText)
 	encoded := deflateData(t, gzipData(t, original))
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
@@ -174,8 +183,76 @@ func TestUnpackMultiHeaderEncodings(t *testing.T) {
 		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
 	}
 
-	if strings.TrimSuffix(rr.Body.String(), "\n") != "hello" {
-		t.Fatalf("handler returned unexpected body: got '%v' want '%v'", rr.Body.String(), "hello")
+	if strings.TrimSuffix(rr.Body.String(), "\n") != helloText {
+		t.Fatalf("handler returned unexpected body: got '%v' want '%v'", rr.Body.String(), helloText)
+	}
+}
+
+func TestUnpackUnsupportedEncodingPassThrough(t *testing.T) {
+	t.Parallel()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBufferString(helloText))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", "br")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.Middleware(requestBodyWriter{})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	if strings.TrimSuffix(rr.Body.String(), "\n") != helloText {
+		t.Fatalf("handler returned unexpected body: got '%v' want '%v'", rr.Body.String(), helloText)
+	}
+}
+
+func TestUnpackUnsupportedEncodingStrict(t *testing.T) {
+	t.Parallel()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBufferString(helloText))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", "br")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.MiddlewareWithOptions(requestBodyWriter{}, unpack.Options{
+		StrictUnsupportedEncodings: true,
+	})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusUnsupportedMediaType)
+	}
+}
+
+func TestUnpackMaxDecompressedBytes(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(helloText)
+	encoded := gzipData(t, payload)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", "gzip")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.MiddlewareWithOptions(requestBodyWriter{}, unpack.Options{
+		MaxDecompressedBytes: int64(len(payload) - 1),
+	})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusRequestEntityTooLarge)
 	}
 }
 
@@ -237,10 +314,10 @@ func deflateData(t *testing.T, payload []byte) []byte {
 
 // benchmarkFileTests defines the cases suitable for benchmarking (successful operations).
 var benchmarkFileTests = []fileTest{
-	{file: "testdata/hello.txt", encoding: "identity", code: http.StatusOK, content: "hello"},
-	{file: "testdata/hello.txt.gz", encoding: "gzip", code: http.StatusOK, content: "hello"},
-	{file: "testdata/hello.txt.zz", encoding: "deflate", code: http.StatusOK, content: "hello"},
-	{file: "testdata/hello.txt.zst", encoding: "zstd", code: http.StatusOK, content: "hello"},
+	{file: "testdata/hello.txt", encoding: "identity", code: http.StatusOK, content: helloText},
+	{file: "testdata/hello.txt.gz", encoding: "gzip", code: http.StatusOK, content: helloText},
+	{file: "testdata/hello.txt.zz", encoding: "deflate", code: http.StatusOK, content: helloText},
+	{file: "testdata/hello.txt.zst", encoding: "zstd", code: http.StatusOK, content: helloText},
 }
 
 func BenchmarkUnpack(b *testing.B) {

@@ -153,11 +153,14 @@ type multiReadCloser struct {
 
 // io.Reader passthrough should preserve upstream errors.
 //
+// Read delegates to the wrapped reader.
+//
 //nolint:wrapcheck
 func (m *multiReadCloser) Read(p []byte) (int, error) {
 	return m.reader.Read(p)
 }
 
+// Close closes all wrapped closers.
 func (m *multiReadCloser) Close() error {
 	return closeAll(m.closers)
 }
@@ -169,6 +172,8 @@ type maxBytesReadCloser struct {
 }
 
 // io.ReadCloser passthrough should preserve upstream errors.
+//
+// Read enforces the configured max decoded bytes.
 //
 //nolint:wrapcheck
 func (m *maxBytesReadCloser) Read(p []byte) (int, error) {
@@ -196,11 +201,14 @@ func (m *maxBytesReadCloser) Read(p []byte) (int, error) {
 
 // io.Closer passthrough should preserve upstream errors.
 //
+// Close closes the wrapped reader.
+//
 //nolint:wrapcheck
 func (m *maxBytesReadCloser) Close() error {
 	return m.rc.Close()
 }
 
+// closeAll closes all closers in reverse order.
 func closeAll(closers []io.Closer) error {
 	var err error
 	for i := len(closers) - 1; i >= 0; i-- {
@@ -210,6 +218,7 @@ func closeAll(closers []io.Closer) error {
 	return err
 }
 
+// parseContentEncodings splits and normalizes Content-Encoding header values.
 func parseContentEncodings(headerValues []string) []string {
 	var encodings []string
 
@@ -227,6 +236,7 @@ func parseContentEncodings(headerValues []string) []string {
 	return encodings
 }
 
+// allSupportedEncodings reports whether every encoding is supported or identity.
 func allSupportedEncodings(encodings []string) bool {
 	for _, encoding := range encodings {
 		switch encoding {
@@ -240,6 +250,7 @@ func allSupportedEncodings(encodings []string) bool {
 	return true
 }
 
+// hasDecodableEncodings reports whether any encoding requires decoding.
 func hasDecodableEncodings(encodings []string) bool {
 	for _, encoding := range encodings {
 		switch encoding {
@@ -251,14 +262,17 @@ func hasDecodableEncodings(encodings []string) bool {
 	return false
 }
 
+// decompressionErrorMessage returns a consistent error string for decode failures.
 func decompressionErrorMessage(encoding string) string {
 	return fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", encoding)
 }
 
+// unsupportedEncodingMessage returns a consistent error string for unsupported encodings.
 func unsupportedEncodingMessage(encoding string) string {
 	return fmt.Sprintf("Content-Encoding: %s is not supported", encoding)
 }
 
+// firstUnsupportedEncoding returns the first unsupported encoding from the list.
 func firstUnsupportedEncoding(encodings []string) string {
 	for _, encoding := range encodings {
 		switch encoding {
@@ -272,6 +286,7 @@ func firstUnsupportedEncoding(encodings []string) string {
 	return "unknown"
 }
 
+// looksLikeZlibHeader reports whether the stream prefix matches a zlib header.
 func looksLikeZlibHeader(reader *bufio.Reader) bool {
 	const (
 		zlibHeaderSize    = 2

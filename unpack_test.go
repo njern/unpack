@@ -233,6 +233,29 @@ func TestUnpackUnsupportedEncodingStrict(t *testing.T) {
 	}
 }
 
+func TestUnpackUnsupportedEncodingStrictMultiple(t *testing.T) {
+	t.Parallel()
+
+	encoded := gzipData(t, []byte(helloText))
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", "gzip, br")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.MiddlewareWithOptions(requestBodyWriter{}, unpack.Options{
+		StrictUnsupportedEncodings: true,
+	})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusUnsupportedMediaType)
+	}
+}
+
 func TestUnpackMaxDecompressedBytes(t *testing.T) {
 	t.Parallel()
 
@@ -426,6 +449,43 @@ func BenchmarkUnpack(b *testing.B) {
 		handler := unpack.Middleware(requestBodyWriter{})
 
 		benchName := fmt.Sprintf("file_%s_encoding_%s", strings.ReplaceAll(strings.ReplaceAll(ft.file, "testdata/", ""), ".", "_"), ft.encoding)
+
+		b.Run(benchName, func(b *testing.B) {
+			b.ResetTimer() // Reset timer to exclude setup like ReadFile and handler creation from this specific sub-benchmark's timing.
+
+			for b.Loop() {
+				req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(buf))
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				req.Header.Set("Content-Encoding", ft.encoding)
+
+				rr := httptest.NewRecorder()
+				handler.ServeHTTP(rr, req)
+
+				if rr.Code != ft.code {
+					b.Fatalf("Handler returned wrong status code: got %v, want %v. File: %s, Encoding: %s", rr.Code, ft.code, ft.file, ft.encoding)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkUnpackMaxDecompressedBytes(b *testing.B) {
+	const maxBytesLimit = 1 << 20
+
+	for _, ft := range benchmarkFileTests {
+		buf, err := os.ReadFile(ft.file)
+		if err != nil {
+			b.Fatalf("Failed to read file %s for benchmarking: %v", ft.file, err)
+		}
+
+		handler := unpack.MiddlewareWithOptions(requestBodyWriter{}, unpack.Options{
+			MaxDecompressedBytes: maxBytesLimit,
+		})
+
+		benchName := fmt.Sprintf("file_%s_encoding_%s_limit", strings.ReplaceAll(strings.ReplaceAll(ft.file, "testdata/", ""), ".", "_"), ft.encoding)
 
 		b.Run(benchName, func(b *testing.B) {
 			b.ResetTimer() // Reset timer to exclude setup like ReadFile and handler creation from this specific sub-benchmark's timing.

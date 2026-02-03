@@ -1,14 +1,21 @@
-package unpack
+package unpack_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt" // Added for benchmark naming
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zlib"
+	"github.com/njern/unpack"
 )
 
 type fileTest struct {
@@ -25,7 +32,7 @@ var fileTests = []fileTest{
 	{file: "testdata/hello.txt.zst", encoding: "zstd", code: http.StatusOK, content: "hello"},
 	{file: "testdata/hello.txt", encoding: "gzip", code: http.StatusUnsupportedMediaType, content: "Content-Encoding: gzip set but unable to decompress body"},
 	{file: "testdata/hello.txt", encoding: "deflate", code: http.StatusUnsupportedMediaType, content: "Content-Encoding: deflate set but unable to decompress body"},
-	{file: "testdata/hello.txt", encoding: "zstd", code: http.StatusInternalServerError, content: "unable to read r.Body"}, // zstd works slightly differently than gzip/deflate.
+	{file: "testdata/hello.txt", encoding: "zstd", code: http.StatusUnsupportedMediaType, content: "Content-Encoding: zstd set but unable to decompress body"},
 }
 
 type requestBodyWriter struct{}
@@ -35,7 +42,15 @@ type requestBodyWriter struct{}
 func (rbw requestBodyWriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var decErr *unpack.DecompressionError
+		if errors.As(err, &decErr) {
+			http.Error(w, fmt.Sprintf("Content-Encoding: %s set but unable to decompress body", decErr.Encoding), http.StatusUnsupportedMediaType)
+
+			return
+		}
+
 		http.Error(w, "unable to read r.Body", http.StatusInternalServerError)
+
 		return
 	}
 
@@ -46,6 +61,8 @@ func (rbw requestBodyWriter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestUnpack(t *testing.T) {
+	t.Parallel()
+
 	for _, ft := range fileTests {
 		buf, err := os.ReadFile(ft.file)
 		if err != nil {
@@ -53,7 +70,7 @@ func TestUnpack(t *testing.T) {
 		}
 
 		// Create a request to pass to our requestBodyWriter.
-		req, err := http.NewRequest("POST", "/test", bytes.NewBuffer(buf))
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(buf))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +82,7 @@ func TestUnpack(t *testing.T) {
 		rr := httptest.NewRecorder()
 
 		// Wrap a requestBodyWriter with our middleware to test it
-		handler := Middleware(requestBodyWriter{})
+		handler := unpack.Middleware(requestBodyWriter{})
 
 		// Our handlers satisfy http.Handler, so we can call their ServeHTTP method
 		// directly and pass in our Request and ResponseRecorder.
@@ -83,6 +100,141 @@ func TestUnpack(t *testing.T) {
 	}
 }
 
+func TestUnpackHeaderNormalization(t *testing.T) {
+	t.Parallel()
+
+	buf, err := os.ReadFile("testdata/hello.txt.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", " GZIP ")
+	req.Header.Set("Content-Length", strconv.Itoa(len(buf)))
+	req.ContentLength = int64(len(buf))
+
+	rr := httptest.NewRecorder()
+	handler := unpack.Middleware(headerCheckHandler{t: t})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+}
+
+func TestUnpackMultipleEncodings(t *testing.T) {
+	t.Parallel()
+
+	original := []byte("hello")
+	encoded := deflateData(t, gzipData(t, original))
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", "gzip, deflate")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.Middleware(requestBodyWriter{})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	if strings.TrimSuffix(rr.Body.String(), "\n") != "hello" {
+		t.Fatalf("handler returned unexpected body: got '%v' want '%v'", rr.Body.String(), "hello")
+	}
+}
+
+func TestUnpackMultiHeaderEncodings(t *testing.T) {
+	t.Parallel()
+
+	original := []byte("hello")
+	encoded := deflateData(t, gzipData(t, original))
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Add("Content-Encoding", "gzip")
+	req.Header.Add("Content-Encoding", "deflate")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.Middleware(requestBodyWriter{})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	if strings.TrimSuffix(rr.Body.String(), "\n") != "hello" {
+		t.Fatalf("handler returned unexpected body: got '%v' want '%v'", rr.Body.String(), "hello")
+	}
+}
+
+type headerCheckHandler struct {
+	t *testing.T
+}
+
+func (h headerCheckHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.t.Helper()
+
+	if got := r.Header.Get("Content-Encoding"); got != "" {
+		h.t.Fatalf("Content-Encoding should be cleared after decoding, got %q", got)
+	}
+
+	if got := r.Header.Get("Content-Length"); got != "" {
+		h.t.Fatalf("Content-Length header should be cleared after decoding, got %q", got)
+	}
+
+	if r.ContentLength != -1 {
+		h.t.Fatalf("ContentLength should be -1 after decoding, got %d", r.ContentLength)
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func gzipData(t *testing.T, payload []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	writer := gzip.NewWriter(&buf)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return buf.Bytes()
+}
+
+func deflateData(t *testing.T, payload []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	writer := zlib.NewWriter(&buf)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return buf.Bytes()
+}
+
 // benchmarkFileTests defines the cases suitable for benchmarking (successful operations).
 var benchmarkFileTests = []fileTest{
 	{file: "testdata/hello.txt", encoding: "identity", code: http.StatusOK, content: "hello"},
@@ -98,19 +250,21 @@ func BenchmarkUnpack(b *testing.B) {
 			b.Fatalf("Failed to read file %s for benchmarking: %v", ft.file, err)
 		}
 
-		handler := Middleware(requestBodyWriter{})
+		handler := unpack.Middleware(requestBodyWriter{})
 
 		benchName := fmt.Sprintf("file_%s_encoding_%s", strings.ReplaceAll(strings.ReplaceAll(ft.file, "testdata/", ""), ".", "_"), ft.encoding)
 
 		b.Run(benchName, func(b *testing.B) {
 			b.ResetTimer() // Reset timer to exclude setup like ReadFile and handler creation from this specific sub-benchmark's timing.
+
 			for b.Loop() {
-				req, err := http.NewRequest("POST", "/test", bytes.NewBuffer(buf))
+				req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(buf))
 				if err != nil {
 					b.Fatal(err)
 				}
 
 				req.Header.Set("Content-Encoding", ft.encoding)
+
 				rr := httptest.NewRecorder()
 				handler.ServeHTTP(rr, req)
 

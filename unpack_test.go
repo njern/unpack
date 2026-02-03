@@ -2,6 +2,7 @@ package unpack_test
 
 import (
 	"bytes"
+	"compress/flate"
 	"context"
 	"errors"
 	"fmt" // Added for benchmark naming
@@ -256,6 +257,80 @@ func TestUnpackMaxDecompressedBytes(t *testing.T) {
 	}
 }
 
+func TestUnpackMaxDecompressedBytesExact(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(helloText)
+	encoded := gzipData(t, payload)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", "gzip")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.MiddlewareWithOptions(requestBodyWriter{}, unpack.Options{
+		MaxDecompressedBytes: int64(len(payload)),
+	})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+}
+
+func TestUnpackMaxDecompressedBytesDisabled(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(helloText)
+	encoded := gzipData(t, payload)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", "gzip")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.MiddlewareWithOptions(requestBodyWriter{}, unpack.Options{
+		MaxDecompressedBytes: 0,
+	})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+}
+
+func TestUnpackRawDeflate(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(helloText)
+	encoded := rawDeflateData(t, payload)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/test", bytes.NewBuffer(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Encoding", "deflate")
+
+	rr := httptest.NewRecorder()
+	handler := unpack.Middleware(requestBodyWriter{})
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	if strings.TrimSuffix(rr.Body.String(), "\n") != helloText {
+		t.Fatalf("handler returned unexpected body: got '%v' want '%v'", rr.Body.String(), helloText)
+	}
+}
+
 type headerCheckHandler struct {
 	t *testing.T
 }
@@ -301,6 +376,27 @@ func deflateData(t *testing.T, payload []byte) []byte {
 	var buf bytes.Buffer
 
 	writer := zlib.NewWriter(&buf)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return buf.Bytes()
+}
+
+func rawDeflateData(t *testing.T, payload []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	writer, err := flate.NewWriter(&buf, flate.DefaultCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if _, err := writer.Write(payload); err != nil {
 		t.Fatal(err)
 	}

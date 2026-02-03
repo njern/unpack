@@ -5,6 +5,12 @@ Go HTTP middleware which unpacks gzip, deflate, or zstd-encoded HTTP requests fr
 [![GoDoc](https://godoc.org/github.com/njern/unpack?status.svg)](https://godoc.org/github.com/njern/unpack)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+## Behavior
+
+- Unsupported `Content-Encoding` values are passed through by default.
+- Enable strict mode to return HTTP 415 for unsupported encodings.
+- Set a maximum decoded size to return HTTP 413 when the limit is exceeded.
+
 ## Example usage (go-chi)
 
 ```go

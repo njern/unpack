@@ -16,7 +16,7 @@ import (
 
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zlib"
-	"github.com/njern/unpack"
+	"github.com/njern/unpack/v2"
 )
 
 type fileTest struct {

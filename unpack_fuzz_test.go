@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/njern/unpack"
+	"github.com/njern/unpack/v2"
 )
 
 func FuzzMiddlewareContentEncoding(f *testing.F) {
